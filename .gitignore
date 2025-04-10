@@ -188,5 +188,6 @@ pyrightconfig.json
 # data files
 *.csv
 *.parquet
+*.bkp
 
 # End of https://www.toptal.com/developers/gitignore/api/python,jupyternotebooks

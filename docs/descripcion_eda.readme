@@ -1,0 +1,76 @@
+### **Resumen del Análisis de Datos Exploratorio (EDA)**
+
+### **1. Dimensiones del Dataset**
+- **Tamaño del dataset**: 
+  - **6362620 filas** y **11 columnas**.
+  - Esto indica un dataset grande, adecuado para análisis a gran escala y modelado en un esquema eficiente.
+
+---
+
+### **2. Estructura del Dataset**
+- **Columnas y Tipos de Datos**:
+  ```plaintext
+  0   step            int64    -> Representa el tiempo en pasos (cada paso = 1 hora).
+  1   type            object   -> Tipo de transacción (e.g., PAYMENT, TRANSFER).
+  2   amount          float64  -> Monto de la transacción.
+  3   nameOrig        object   -> Identificador de la cuenta de origen.
+  4   oldbalanceOrg   float64  -> Saldo anterior de la cuenta de origen.
+  5   newbalanceOrig  float64  -> Saldo posterior de la cuenta de origen.
+  6   nameDest        object   -> Identificador de la cuenta de destino.
+  7   oldbalanceDest  float64  -> Saldo anterior de la cuenta de destino.
+  8   newbalanceDest  float64  -> Saldo posterior de la cuenta de destino.
+  9   isFraud         int64    -> Indicador de fraude (1 = Sí, 0 = No).
+  10  isFlaggedFraud  int64    -> Indicador de sospecha de fraude (1 = Sí, 0 = No).
+  ```
+  - **Columnas clave para modelado**:
+    - `type`: Base para la dimensión `transaction_types`.
+    - `nameOrig` y `nameDest`: Base para la dimensión `account_name` y la relación en `account_transaction`.
+    - `amount`, `oldbalanceOrg`, `newbalanceOrig`, `oldbalanceDest`, `newbalanceDest`: Información financiera clave para las tablas de hechos (`transactions` y `account_transaction`).
+    - `isFraud` y `isFlaggedFraud`: Indicadores importantes para análisis de fraude.
+
+---
+
+### **3. Limpieza de Datos**
+- **Duplicados**:
+  - No se encontraron duplicados en el dataset (`Registros originales: 6362620 | Registros limpios: 6362620`).
+- **Valores nulos**:
+  - No se encontraron valores nulos en ninguna columna.
+
+---
+
+### **4. Distribución de Clases**
+- **Transacciones fraudulentas (`isFraud`)**:
+  - **99.87%** de las transacciones no son fraudulentas.
+  - **0.13%** de las transacciones son fraudulentas.
+  - Esto indica un dataset altamente desbalanceado, lo cual es importante para análisis y modelado de fraude.
+
+---
+
+### **5. Tipos de Transacciones**
+- **Distribución de `type`**:
+  - Los tipos de transacción más comunes son `PAYMENT`, `TRANSFER`, `CASH_OUT`, y `CASH_IN`.
+  - Los tipos menos comunes incluyen `DEBIT` y `TRANSFER`.
+
+- **Transacciones fraudulentas por tipo**:
+  - Los fraudes están concentrados en los tipos `TRANSFER` y `CASH_OUT`.
+  - Esto sugiere que estas categorías son críticas para el análisis de fraude.
+
+---
+
+### **6. Análisis de Montos**
+- **Distribución de montos (`amount`)**:
+  - Se realizó un análisis de los montos de transacciones fraudulentas y no fraudulentas.
+  - Los montos fraudulentos tienden a ser más altos que los no fraudulentos.
+
+
+### **Bases para el Modelado de Datos**
+El análisis exploratorio proporciona las siguientes bases para modelar los datos:
+
+1. **Dimensión `transaction_type`**:
+   - Basada en la columna `type`, que contiene los tipos de transacciones.
+
+2. **Dimensión `account`**:
+   - Basada en las columnas `nameOrig` y `nameDest`, que representan las cuentas de origen y destino y los codigos de las cuentas.
+
+3. **Tabla de hechos `transactions`**:
+   - Incluye información general de las transacciones, como `amount`, `isFraud`, `isFlaggedFraud`, y las referencias a las dimensiones `transaction_type` y `account`. Se utiliza la columna step para calcular la fecha partiendo de una fecha inicial

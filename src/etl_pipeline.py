@@ -1,81 +1,81 @@
-import sys
-from awsglue.transforms import *
-from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
-from awsglue.context import GlueContext
-from awsglue.job import Job
-from awsglue.dynamicframe import DynamicFrame
-from pyspark.sql.functions import col, lit, expr
-from pyspark.sql.types import IntegerType, FloatType, StringType, DoubleType
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, lit, when, monotonically_increasing_id
 
-args = getResolvedOptions(sys.argv, ['JOB_NAME'])
-
-
-sc = SparkContext()
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
-job = Job(glueContext)
-job.init(args['JOB_NAME'], args)
+spark = (SparkSession.builder
+        .appName("Data Transformation for Relational Model")
+        .getOrCreate()
+        )
 
 input_path = "s3://nqi-tech-raw/PS_20174392719_1491204439457_log.csv"
-output_path = "s3://nqi-tech-processed/data_cleaned.parquet"
+output_path = "s3://nqi-tech-processed/data/relational_model/"
 
-datasource = glueContext.create_dynamic_frame.from_options(
-    connection_type="s3",
-    connection_options={"paths": [input_path]},
-    format="csv",
-    format_options={"withHeader": True, "separator": ","}
+df = spark.read.csv(input_path, header=True, inferSchema=True)
+
+# 1. Crear tabla transaction_type
+# Extraer tipos únicos de transacción
+transaction_types_df = df.select("type").distinct()
+transaction_types_df = transaction_types_df.withColumn("type_id", monotonically_increasing_id())
+transaction_types_df = transaction_types_df.select(
+                                                    col("type_id").cast("int"),
+                                                    col("type").alias("transaction_type")
+                                                    )
+
+transaction_types_df.write.mode("overwrite").parquet(f"{output_path}transaction_type.parquet")
+
+
+# 2. Crear tabla account (combinando las cuentas de origen y destino)
+# Extraer cuentas únicas (origen)
+accounts_orig_df = df.select(
+                            col("name_orig").alias("account_code")
+                            ).distinct()
+
+# Extraer cuentas únicas (destino)
+accounts_dest_df = df.select(
+                            col("name_dest").alias("account_code")
+                            ).distinct()
+
+# Unir cuentas y asignar IDs
+accounts_df = accounts_orig_df.union(accounts_dest_df).distinct()
+accounts_df = accounts_df.withColumn("account_id", monotonically_increasing_id())
+
+accounts_df.write.mode("overwrite").parquet(f"{output_path}transactions.parquet")
+
+
+# 3. Crear tabla transaction
+# Primero, unir con la tabla transaction_type para obtener type_id
+df_with_type_id = df.join(
+    transaction_types_df.select(col("type_id"), col("transaction_type").alias("type")),
+    on="type"
 )
 
-
-df = datasource.toDF()
-
-#### Procesado de data ####
-
-# 0. establecer tipado de columnas
-df = df \
-    .withColumn("step", col("step").cast(IntegerType())) \
-    .withColumn("type", col("type").cast(StringType())) \
-    .withColumn("amount", col("amount").cast(DoubleType())) \
-    .withColumn("nameOrig", col("nameOrig").cast(StringType())) \
-    .withColumn("oldbalanceOrg", col("oldbalanceOrg").cast(FloatType())) \
-    .withColumn("newbalanceOrig", col("newbalanceOrig").cast(FloatType())) \
-    .withColumn("nameDest", col("nameDest").cast(StringType())) \
-    .withColumn("oldbalanceDest", col("oldbalanceDest").cast(FloatType())) \
-    .withColumn("newbalanceDest", col("newbalanceDest").cast(FloatType())) \
-    .withColumn("isFraud", col("isFraud").cast(IntegerType())) \
-    .withColumn("isFlaggedFraud", col("isFlaggedFraud").cast(IntegerType()))
-
-
-
-# 1. Eliminar duplicados
-df_clean = df.dropDuplicates()
-
-# 2. Crear columna de fecha basada en la columna 'step'
-start_date = "2025-01-01 00:00:00"
-df_clean = df_clean.withColumn(
-    "date",
-    expr(f"timestamp('{start_date}') + (step * INTERVAL '1' HOUR)")
+# Unir con la tabla account para obtener IDs de cuenta origen
+df_with_orig_id = df_with_type_id.join(
+    accounts_df.select(col("account_id").alias("orig_account_id"), col("account_code").alias("name_orig")),
+    on="name_orig"
 )
 
-# 3. Normalizar la columna 'amount' usando log1p
-df_clean = df_clean.withColumn("amount_log", expr("log1p(amount)"))
-
-# 4. Rellenar valores nulos en la columna 'amount' con la mediana
-median_amount = df_clean.filter(col("amount").isNotNull()).approxQuantile("amount", [0.5], 0.01)[0]
-df_clean = df_clean.fillna({"amount": median_amount})
-
-############################
-
-
-df_dynamic = DynamicFrame.fromDF(df_clean, glueContext, "df_dynamic")
-
-glueContext.write_dynamic_frame.from_options(
-    frame=df_dynamic,
-    connection_type="s3",
-    connection_options={"path": output_path},
-    format="parquet",
-    format_options={"compression": "gzip"}
+# Unir con la tabla account para obtener IDs de cuenta destino
+df_with_both_ids = df_with_orig_id.join(
+    accounts_df.select(col("account_id").alias("dest_account_id"), col("account_code").alias("name_dest")),
+    on="name_dest"
 )
 
-job.commit()
+# Crear la tabla final de transacciones
+transactions_df = df_with_both_ids.select(
+    monotonically_increasing_id().alias("transaction_id"),
+    col("type_id").cast("int"),
+    col("orig_account_id").cast("bigint"),
+    col("dest_account_id").cast("bigint"),
+    col("orld_balance_orig").alias("old_balance_orig").cast("decimal(18,2)"),
+    col("new_balance_orig").alias("new_balance_orig").cast("decimal(18,2)"),
+    col("old_balance_dest").alias("old_balance_dest").cast("decimal(18,2)"),
+    col("new_balance_dest").alias("new_balance_dest").cast("decimal(18,2)"),
+    col("amount").cast("decimal(18,2)"),
+    col("is_fraud").alias("is_fraud").cast("boolean"),
+    col("is_flagged_fraud").alias("is_flagged_fraud").cast("boolean"),
+    col("datetime").alias("transaction_date_time")
+)
+transactions_df.write.mode("overwrite").parquet(f"{output_path}transaction.parquet")
+
+
+spark.stop()

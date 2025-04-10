@@ -1,0 +1,73 @@
+# Descripción del Dataset
+
+El conjunto de datos de **PaySim** es un conjunto de datos sintético que simula transacciones de dinero móvil, creado para facilitar la investigación en detección de fraudes financieros. Se basa en datos reales de transacciones de un servicio de dinero móvil en un país africano, proporcionados por una empresa multinacional que opera este servicio en más de 14 países.
+
+El conjunto de datos disponible en Kaggle es una versión reducida a una cuarta parte del original. Puedes acceder al dataset en la siguiente URL: [PaySim Dataset en Kaggle](https://www.kaggle.com/datasets/ealaxi/paysim1?resource=download).
+
+---
+
+## Estructura del Dataset
+
+El dataset contiene las siguientes columnas:
+
+### **1. `step`**
+- **Descripción**: Representa una unidad de tiempo en el mundo real; en este caso, 1 paso equivale a 1 hora.
+- **Rango**: 744 pasos, correspondientes a 30 días.
+
+### **2. `type`**
+- **Descripción**: Tipo de transacción.
+- **Valores posibles**:
+  - `CASH-IN`: Depósito de efectivo.
+  - `CASH-OUT`: Retiro de efectivo.
+  - `DEBIT`: Débito.
+  - `PAYMENT`: Pago.
+  - `TRANSFER`: Transferencia.
+
+### **3. `amount`**
+- **Descripción**: Monto de la transacción en la moneda local.
+
+### **4. `nameOrig`**
+- **Descripción**: Identificador del cliente que inicia la transacción.
+
+### **5. `oldbalanceOrg`**
+- **Descripción**: Saldo inicial del cliente antes de la transacción.
+
+### **6. `newbalanceOrig`**
+- **Descripción**: Saldo del cliente después de la transacción.
+
+### **7. `nameDest`**
+- **Descripción**: Identificador del cliente que recibe la transacción.
+
+### **8. `oldbalanceDest`**
+- **Descripción**: Saldo inicial del receptor antes de la transacción.
+- **Nota**: No hay información disponible para clientes cuyo identificador comienza con `'M'` (comerciantes).
+
+### **9. `newbalanceDest`**
+- **Descripción**: Saldo del receptor después de la transacción.
+- **Nota**: Al igual que en `oldbalanceDest`, no hay información para identificadores que comienzan con `'M'`.
+
+### **10. `isFraud`**
+- **Descripción**: Indica si la transacción es fraudulenta.
+- **Valores posibles**:
+  - `1`: Transacción fraudulenta.
+  - `0`: Transacción no fraudulenta.
+- **Nota**: Las transacciones fraudulentas representan intentos de agentes malintencionados por vaciar las cuentas de los clientes mediante transferencias a otras cuentas y posteriores retiros de efectivo.
+
+### **11. `isFlaggedFraud`**
+- **Descripción**: Señala intentos de transferir más de 200,000 en una sola transacción.
+- **Valores posibles**:
+  - `1`: Transacción marcada como sospechosa.
+  - `0`: Transacción no marcada como sospechosa.
+
+---
+
+## Notas Adicionales
+- Este dataset es ideal para realizar análisis de detección de fraudes financieros y modelado de datos.
+- Las transacciones fraudulentas están concentradas en los tipos `TRANSFER` y `CASH-OUT`.
+- Los datos han sido generados de manera sintética, pero están basados en patrones reales de transacciones.
+
+---
+
+## Recursos
+- **Dataset original**: [PaySim Dataset en Kaggle](https://www.kaggle.com/datasets/ealaxi/paysim1?resource=download)
+- **Documentación oficial**: Proporcionada por los autores del dataset en Kaggle.
