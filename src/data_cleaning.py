@@ -1,132 +1,146 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, to_date, when, isnan, count, lit, monotonically_increasing_id
-from pyspark.sql.types import FloatType, IntegerType, BooleanType, DateType
+from pyspark.sql.functions import col, expr, when, lit
+from pyspark.sql.types import FloatType, BooleanType, DateType
+import os
+from pathlib import Path
 
-# Iniciar SparkSession
-spark = SparkSession.builder.appName("FraudDetectionETL").getOrCreate()
+import logging
+logging.getLogger("py4j").setLevel(logging.ERROR)
 
-# 1. Cargar datos CSV
-df = spark.read.csv("ruta_datos.csv", header=True, inferSchema=True)
 
-# 2. Eliminar vacíos de columnas prioritarias
-columnas_prioritarias = ["step", "type", "amount", "nameOrig", "oldbalanceOrg", 
-                         "newbalanceOrig", "nameDest", "isFraud"]
+class DataCleaningPipeline:
+    def __init__(self, spark=None):
+        """Inicializar el pipeline con una sesión Spark opcional."""
+        if not spark:
+            # Configuracion de Spark para operar usando 4GB de memoria ram
+            self.spark = (SparkSession.builder
+                .appName("FraudDetectionETL")
+                .config("spark.driver.memory", "4g")
+                .config("spark.executor.memory", "4g")
+                .getOrCreate())
+        else:
+            self.spark = spark
+    
+    def load_data(self, input_path):
+        """Cargar datos desde un archivo CSV."""
+        return self.spark.read.csv(input_path, header=True, inferSchema=False)
+    
+    def remove_nulls(self, df, priority_columns):
+        """Eliminar filas con valores nulos en columnas prioritarias."""
+        result_df = df
+        for col_name in priority_columns:
+            result_df = result_df.filter(~(col(col_name).isNull() | (col(col_name) == "")))
+        return result_df
+    
+    def remove_duplicates(self, df):
+        """Eliminar filas duplicadas."""
+        return df.dropDuplicates()
+    
+    def normalize_text_fields(self, df):
+        """Normalizar campos de texto."""
+        return (df
+        .withColumn(
+            "type", when(col("type").isNotNull(), col("type")).otherwise(lit("UNKNOWN"))
+        ).withColumn(
+            "nameOrig", when(col("nameOrig").isNotNull(), col("nameOrig")).otherwise(lit("UNKNOWN"))
+        ).withColumn(
+            "nameDest", when(col("nameDest").isNotNull(), col("nameDest")).otherwise(lit("UNKNOWN"))
+        ))
+    
+    def create_date_column(self, df):
+        """Crear columna de fecha a partir de step tomamos fecha inicial este año (tomado como una referencia)."""
+        start_date = "2025-01-01 00:00:00"
+        df_with_date = (df.withColumn(
+            "date", expr(f"timestamp('{start_date}') + (step * INTERVAL '1' HOUR)")
+        ))
+        return df_with_date.drop("step")
+    
+    def convert_column_types(self, df):
+        """Convertir columnas a los tipos de datos correctos."""
+        return (df.withColumn("type", col("type").cast("string"))
+                 .withColumn("amount", col("amount").cast(FloatType()))
+                 .withColumn("nameOrig", col("nameOrig").cast("string"))
+                 .withColumn("oldbalanceOrg", col("oldbalanceOrg").cast(FloatType()))
+                 .withColumn("newbalanceOrig", col("newbalanceOrig").cast(FloatType()))
+                 .withColumn("nameDest", col("nameDest").cast("string"))
+                 .withColumn("oldbalanceDest", col("oldbalanceDest").cast(FloatType()))
+                 .withColumn("newbalanceDest", col("newbalanceDest").cast(FloatType()))
+                 .withColumn("isFraud", col("isFraud").cast(BooleanType()))
+                 .withColumn("isFlaggedFraud", col("isFlaggedFraud").cast(BooleanType()))
+                 .withColumn("date", col("date").cast(DateType()))
+        )
+    
+    def rename_columns(self, df):
+        """Renombrar columnas según el modelo de datos."""
+        return (df.withColumnRenamed("type", "type")
+                 .withColumnRenamed("amount", "amount")
+                 .withColumnRenamed("nameOrig", "name_orig")
+                 .withColumnRenamed("oldbalanceOrg", "orig_balance_orig")
+                 .withColumnRenamed("newbalanceOrig", "new_balance_orig")
+                 .withColumnRenamed("nameDest", "name_dest")
+                 .withColumnRenamed("oldbalanceDest", "old_balance_dest")
+                 .withColumnRenamed("newbalanceDest", "new_balance_dest")
+                 .withColumnRenamed("isFraud", "is_fraud")
+                 .withColumnRenamed("isFlaggedFraud", "is_flagged_fraud")
+                 .withColumnRenamed("date", "datetime")
+        )
+    
+    
+    def save_parquet(self, df, output_path):
+        """Guardar DataFrame en formato Parquet usando pandas."""
+        # Convertir a pandas y guardar
+        pandas_df = df.toPandas()
+        pandas_df.to_parquet(str(output_path))
+        
+    def run_pipeline(self, input_path, output_dir):
+        """Ejecutar el pipeline completo."""
+        # Cargar datos
+        df = self.load_data(input_path)
+        original_count = df.count()
+        
+        # Paso 1: Eliminar nulos
+        priority_columns = ["step", "type", "amount", "nameOrig", "oldbalanceOrg", 
+                           "newbalanceOrig", "nameDest", "isFraud"]
+        
+        df_no_nulls = self.remove_nulls(df, priority_columns)
+        no_nulls_count = df_no_nulls.count()
+        
+        # Paso 2: Eliminar duplicados
+        df_no_duplicates = self.remove_duplicates(df_no_nulls)
+        no_duplicates_count = df_no_duplicates.count()
+        
+        # Paso 3: Normalizar texto
+        df_normalized = self.normalize_text_fields(df_no_duplicates)
+        
+        # Paso 4: Crear columna fecha
+        df_with_date = self.create_date_column(df_normalized)
+        
+        # Paso 5: Convertir tipos
+        df_typed = self.convert_column_types(df_with_date)
+        
+        # Paso 6: Renombrar columnas
+        df_renamed = self.rename_columns(df_typed)
+        
+        
+        # Paso 7: Guardar en Parquet
+        self.save_parquet(df_renamed, os.path.join(output_dir))
 
-df_sin_nulos = df
-for col_name in columnas_prioritarias:
-    df_sin_nulos = df_sin_nulos.filter(~(col(col_name).isNull() | 
-                                        (col(col_name) == "") | 
-                                        isnan(col(col_name))))
+        summary = {
+        "registros_originales": original_count,
+        "registros_sin_nulos": no_nulls_count,
+        "registros_sin_duplicados": no_duplicates_count
+        }
 
-# 3. Eliminar duplicados general
-df_sin_duplicados = df_sin_nulos.dropDuplicates()
+        return summary
 
-# 4. Normalización de campos tipo texto
-# Asumimos que queremos estandarizar los valores en columnas tipo texto
-df_normalizado = (df_sin_duplicados.withColumn(
-    "type", when(col("type").isNotNull(), col("type")).otherwise(lit("UNKNOWN"))
-).withColumn(
-    "nameOrig", when(col("nameOrig").isNotNull(), col("nameOrig")).otherwise(lit("UNKNOWN"))
-).withColumn(
-    "nameDest", when(col("nameDest").isNotNull(), col("nameDest")).otherwise(lit("UNKNOWN"))
-))
 
-# 5. Creación de columna fecha
-# Convertimos step a fecha y eliminamos la columna original
-df_con_fecha = (df_normalizado.withColumn(
-    "date", to_date(col("step").cast("string"), "yyyyMMdd")
-))
-df_con_fecha = df_con_fecha.drop("step")
+if __name__ == "__main__":
+    base_dir = Path().resolve().parent
 
-# 6. Convertir tipo de columna
-df_tipado = (df_con_fecha.withColumn("type", col("type").cast("string"))
-                         .withColumn("amount", col("amount").cast(FloatType()))
-                         .withColumn("nameOrig", col("nameOrig").cast("string"))
-                         .withColumn("oldbalanceOrg", col("oldbalanceOrg").cast(FloatType()))
-                         .withColumn("newbalanceOrig", col("newbalanceOrig").cast(FloatType()))
-                         .withColumn("nameDest", col("nameDest").cast("string"))
-                         .withColumn("oldbalanceDest", col("oldbalanceDest").cast(FloatType()))
-                         .withColumn("newbalanceDest", col("newbalanceDest").cast(FloatType()))
-                         .withColumn("isFraud", col("isFraud").cast(BooleanType()))
-                         .withColumn("isFlaggedFraud", col("isFlaggedFraud").cast(BooleanType()))
-                         .withColumn("date", col("date").cast(DateType()))
-)
+    dataset_path = str(base_dir / 'data' / 'raw' / 'PS_20174392719_1491204439457_log.csv')
+    output_path = str(base_dir / 'data' / 'processed' / 'data_cleaned.parquet')
 
-# 7. Renombrar columnas
-df_renombrado = (df_tipado.withColumnRenamed("type", "type")
-                         .withColumnRenamed("amount", "amount")
-                         .withColumnRenamed("nameOrig", "name_orig")
-                         .withColumnRenamed("oldbalanceOrg", "orig_balance_orig")
-                         .withColumnRenamed("newbalanceOrig", "new_balance_orig")
-                         .withColumnRenamed("nameDest", "name_dest")
-                         .withColumnRenamed("oldbalanceDest", "old_balance_dest")
-                         .withColumnRenamed("newbalanceDest", "new_balance_dest")
-                         .withColumnRenamed("isFraud", "is_fraud")
-                         .withColumnRenamed("isFlaggedFraud", "is_flagged_fraud")
-                         .withColumnRenamed("date", "datetime")
-)
-
-# 8. Preparar las tablas según el modelo relacional
-# Tabla transaction_type
-transaction_types_df = df_renombrado.select("type").distinct()
-transaction_types_df = transaction_types_df.withColumn("type_id", monotonically_increasing_id())
-transaction_types_df = (transaction_types_df.select(
-    col("type_id").cast("int"),
-    col("type").alias("transaction_type")
-))
-
-# Tabla account (combinando las cuentas de origen y destino)
-accounts_orig_df = (df_renombrado.select(
-    col("name_orig").alias("account_code")
-).distinct())
-
-accounts_dest_df = (df_renombrado.select(
-    col("name_dest").alias("account_code")
-).distinct())
-
-accounts_df = accounts_orig_df.union(accounts_dest_df).distinct()
-accounts_df = accounts_df.withColumn("account_id", monotonically_increasing_id())
-
-# Tabla transaction
-df_with_type_id = (df_renombrado.join(
-    transaction_types_df.select(col("type_id"), col("transaction_type").alias("type")),
-    on="type"
-))
-
-df_with_orig_id = (df_with_type_id.join(
-    accounts_df.select(col("account_id").alias("orig_account_id"), col("account_code").alias("name_orig")),
-    on="name_orig"
-))
-
-df_with_both_ids = (df_with_orig_id.join(
-    accounts_df.select(col("account_id").alias("dest_account_id"), col("account_code").alias("name_dest")),
-    on="name_dest"
-))
-
-transactions_df = (df_with_both_ids.select(
-    monotonically_increasing_id().alias("transaction_id"),
-    col("type_id").cast("int"),
-    col("orig_account_id").cast("bigint"),
-    col("dest_account_id").cast("bigint"),
-    col("orig_balance_orig").alias("old_balance_orig").cast("decimal(18,2)"),
-    col("new_balance_orig").cast("decimal(18,2)"),
-    col("old_balance_dest").cast("decimal(18,2)"),
-    col("new_balance_dest").cast("decimal(18,2)"),
-    col("amount").cast("decimal(18,2)"),
-    col("is_fraud").cast("boolean"),
-    col("is_flagged_fraud").cast("boolean"),
-    col("datetime")
-))
-
-# 9. Guardar las tablas en formato Parquet
-transaction_types_df.write.mode("overwrite").parquet("ruta/transaction_type.parquet")
-accounts_df.write.mode("overwrite").parquet("ruta/account.parquet")
-transactions_df.write.mode("overwrite").parquet("ruta/transaction.parquet")
-
-# 10. Mostrar un resumen del procesamiento
-print(f"Registros originales: {df.count()}")
-print(f"Registros después de eliminar nulos: {df_sin_nulos.count()}")
-print(f"Registros después de eliminar duplicados: {df_sin_duplicados.count()}")
-print(f"Tipos de transacción: {transaction_types_df.count()}")
-print(f"Cuentas únicas: {accounts_df.count()}")
-print(f"Transacciones finales: {transactions_df.count()}")
+    pipeline = DataCleaningPipeline()
+    summary = pipeline.run_pipeline(dataset_path, output_path)
+    for key, value in summary.items():
+        print(f"{key}: {value}")
